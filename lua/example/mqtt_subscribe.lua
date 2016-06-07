@@ -1,91 +1,116 @@
 #!/usr/bin/lua
--- ------------------------------------------------------------------------- --
--- mqtt_subscribe.lua
--- ~~~~~~~~~~~~~~~~~~
--- Please do not remove the following notices.
--- Copyright (c) 2011-2012 by Geekscape Pty. Ltd.
--- Documentation: http://http://geekscape.github.com/mqtt_lua
--- License: AGPLv3 http://geekscape.org/static/aiko_license.html
--- Version: 0.2 2012-06-01
---
--- Description
--- ~~~~~~~~~~~
--- Subscribe to an MQTT topic and display any received messages.
---
--- References
--- ~~~~~~~~~~
--- Lapp Framework: Lua command line parsing
---   http://lua-users.org/wiki/LappFramework
---
--- ToDo
--- ~~~~
--- None, yet.
--- ------------------------------------------------------------------------- --
+
+local lapp = require("lapp")
+local MQTT = require "mqtt"
+local socket = require "socket"
+local HOST = '127.0.0.1'
+local cjson = require "cjson"
+
+local args = lapp [[
+    Subscribe to a specified MQTT topic
+    -d,--debug                                Verbose console logging
+    -H,--host          (default localhost)    MQTT server hostname
+    -i,--id            (default mqtt_sub)     MQTT client identifier
+    -k,--keepalive     (default 60)           Send MQTT PING period (seconds)
+    -p,--port          (default 1883)         MQTT server port number
+    -t,--topic         (string)               Subscription topic
+    -w,--will_message  (default .)            Last will and testament message
+    -w,--will_qos      (default 0)            Last will and testament QOS
+    -w,--will_retain   (default 0)            Last will and testament retention
+    -w,--will_topic    (default .)            Last will and testament topic
+    -u,--user          (default test)          MQTT client user
+    -s,--password      (default test123)      MQTT client password
+]]
+
+local mz_mqtt           = {
+    ["debug"]           = args.debug,
+    ["host"]            = args.host,
+    ["id"]              = args.id,
+    ["keepalive"]       = args.keepalive, 
+    ["port"]            = args.port,
+    ["topic"]           = args.topic,
+    ["will_message"]    = args.will_message,
+    ["will_qos"]        = args.will_qos,
+    ["will_retain"]     = args.will_retain,
+    ["will_topic"]      = args.will_topic,
+    ["user"]            = args.user,
+    ["password"]        = args.password
+}
+
 
 function callback(
-  topic,    -- string
-  message)  -- string
+    topic,    -- string
+    message)  -- string
 
-  print("Topic: " .. topic .. ", message: '" .. message .. "'")
+    print("Topic: " .. topic .. ", message: '" .. message .. "'")
+    local data = message
+    if data ~= nil then
+        local data_json = cjson.decode(data)
+        if data_json.type then
+            --local result = {}
+            --mqtt_client:publish(mz_mqtt["topic"], 0, result)
+        else
+            --...
+        end
+    end   
 end
-
--- ------------------------------------------------------------------------- --
-
-function is_openwrt()
-  return(os.getenv("USER") == "root")  -- Assume logged in as "root" on OpenWRT
-end
-
--- ------------------------------------------------------------------------- --
 
 print("[mqtt_subscribe v0.2 2012-06-01]")
 
-if (not is_openwrt()) then require("luarocks.require") end
-local lapp = require("pl.lapp")
 
-local args = lapp [[
-  Subscribe to a specified MQTT topic
-  -d,--debug                                Verbose console logging
-  -H,--host          (default localhost)    MQTT server hostname
-  -i,--id            (default mqtt_sub)     MQTT client identifier
-  -k,--keepalive     (default 60)           Send MQTT PING period (seconds)
-  -p,--port          (default 1883)         MQTT server port number
-  -t,--topic         (string)               Subscription topic
-  -w,--will_message  (default .)            Last will and testament message
-  -w,--will_qos      (default 0)            Last will and testament QOS
-  -w,--will_retain   (default 0)            Last will and testament retention
-  -w,--will_topic    (default .)            Last will and testament topic
-]]
+function mqtt_client_create()
+    if (mz_mqtt["debug"]) then MQTT.Utility.set_debug(true) end
+    if (mz_mqtt["keepalive"]) then MQTT.client.KEEP_ALIVE_TIME = mz_mqtt["keepalive"] end
 
-local MQTT = require("mqtt_library")
+    mqtt_client = MQTT.client.create(mz_mqtt["host"], mz_mqtt["port"], true, callback)
+    mqtt_client:auth(mz_mqtt["user"], mz_mqtt["password"])
+    connresult = nil
 
-if (args.debug) then MQTT.Utility.set_debug(true) end
+    if (mz_mqtt["will_message"] == "."  or  mz_mqtt["will_topic"] == ".") then
+        connresult = mqtt_client:connect(mz_mqtt["id"])
+    else
+        connresult = mqtt_client:connect(
+        mz_mqtt["id"], mz_mqtt["will_topic"], mz_mqtt["will_qos"], mz_mqtt["will_retain"], mz_mqtt["will_message"]
+        )
+    end
 
-if (args.keepalive) then MQTT.client.KEEP_ALIVE_TIME = args.keepalive end
+    mqtt_client:subscribe({mz_mqtt["will_topic"]})
+    local error_message = nil
 
-local mqtt_client = MQTT.client.create(args.host, args.port, callback)
+    sock = socket.tcp()
+    local ok, err = sock:connect('127.0.0.1', 12233)
 
-if (args.will_message == "."  or  args.will_topic == ".") then
-  mqtt_client:connect(args.id)
-else
-  mqtt_client:connect(
-    args.id, args.will_topic, args.will_qos, args.will_retain, args.will_message
-  )
 end
 
-mqtt_client:subscribe({args.topic})
+function stay_connected() 
+    while (true) do
+        error_message = mqtt_client:handler()
+        if (error_message ~=  nil) then
+            print(error_message)
+        end
 
-local error_message = nil
-
-while (error_message == nil) do
-  error_message = mqtt_client:handler()
-  socket.sleep(1.0)  -- seconds
+        sock:settimeout(0)
+        socket.sleep(0.1)  -- seconds
+    end
 end
 
-if (error_message == nil) then
-  mqtt_client:unsubscribe({args.topic})
-  mqtt_client:destroy()
-else
-  print(error_message)
+function mqtt_client_destroy()
+    mqtt_client:unsubscribe({mz_mqtt["topic"]})
+    mqtt_client:destroy()
 end
+local conn_retry_cnt = 0
+while conn_retry_cnt < 100 do
 
--- ------------------------------------------------------------------------- --
+    require "MZLog".log(3, "##########mqtt_create##############")
+    local status_create, res_create = pcall(mqtt_client_create, nil)
+   
+    require "MZLog".log(3, "##########stay_connected##############")
+    local status, res = pcall(stay_connected, nil)
+
+    require "MZLog".log(3, "###########mqtt_destroy#############")
+    local status_destroy, res_destroy = pcall(mqtt_client_destroy, nil)
+
+
+    conn_retry_cnt = conn_retry_cnt + 1
+    socket.sleep(1)
+end
