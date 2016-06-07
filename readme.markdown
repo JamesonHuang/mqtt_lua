@@ -1,15 +1,7 @@
-Lua MQTT client library (version 0.2 2012-06-01)
-=======================
-
-This project is part of the
-[Aiko Platform](https://sites.google.com/site/aikoplatform)
-
-##this project is forked from geekscape/mqtt_lua, and optimize the code as follow:
+**this project is forked from geekscape/mqtt_lua, and optimize the code as follow:**
 
 * update:self.socket_client:send() to fix the bug: can not snd msg which the length of msg > 8k
 
 * update mqtt_subscribe.lua: add mqtt_conn_retry to avoid mqtt broken
 
 * import mqtt_subscribe_async.lua
-
- 
